@@ -526,15 +526,15 @@ async def translate_v4_microphone(conf: Config, out_dir: str = "output", output_
                     recv_audio.extend(resp.data)
                     logging.info(f"[Audio] Received {len(resp.data)} bytes of TTS audio")
                     
-                    # Real-time save audio chunk
-                    os.makedirs(out_dir, exist_ok=True)
-                    audio_output_path = Path(out_dir) / f"translate_audio_{session_id[:8] if session_id else 'unknown'}.opus"
-                    try:
-                        with open(audio_output_path, 'ab') as f:
-                            f.write(resp.data)
-                        print(f"[SAVE] Audio chunk saved: {len(resp.data)} bytes")
-                    except Exception as e:
-                        print(f"[ERROR] Failed to save audio: {e}")
+                    # Real-time save audio chunk (disabled - output to file commented out)
+                    # os.makedirs(out_dir, exist_ok=True)
+                    # audio_output_path = Path(out_dir) / f"translate_audio_{session_id[:8] if session_id else 'unknown'}.opus"
+                    # try:
+                    #     with open(audio_output_path, 'ab') as f:
+                    #         f.write(resp.data)
+                    #     print(f"[SAVE] Audio chunk saved: {len(resp.data)} bytes")
+                    # except Exception as e:
+                    #     print(f"[ERROR] Failed to save audio: {e}")
             elif resp.event == 351:  # Audio end marker
                 # Check for duplicate sequence
                 import time
@@ -605,48 +605,48 @@ async def translate_v4_microphone(conf: Config, out_dir: str = "output", output_
 
         await conn.close()
 
-    # Save results
-    if recv_audio:
-        os.makedirs(out_dir, exist_ok=True)
-        output_path = Path(out_dir) / f"translate_audio_mic_{int(time.time())}.opus"
-        try:
-            with open(output_path, 'wb') as f:
-                f.write(recv_audio)
-            logging.info(f"TTS audio saved as: {output_path}")
-        except Exception as e:
-            logging.error(f"Save audio file: {e}")
+    # Save results (disabled - output to file commented out)
+    # if recv_audio:
+    #     os.makedirs(out_dir, exist_ok=True)
+    #     output_path = Path(out_dir) / f"translate_audio_mic_{int(time.time())}.opus"
+    #     try:
+    #         with open(output_path, 'wb') as f:
+    #             f.write(recv_audio)
+    #         logging.info(f"TTS audio saved as: {output_path}")
+    #     except Exception as e:
+    #         logging.error(f"Save audio file: {e}")
 
     if recv_text:
         logging.info(f"=== Translation Results ===")
         logging.info(f"{' '.join(recv_text)}")
         logging.info(f"===========================")
         
-        # Save translation text to file
-        print(f"\n[DEBUG] recv_text has {len(recv_text)} items")
-        print(f"[DEBUG] session_id = {session_id}")
+        # Save translation text to file (disabled)
+        # print(f"\n[DEBUG] recv_text has {len(recv_text)} items")
+        # print(f"[DEBUG] session_id = {session_id}")
         
-        os.makedirs(out_dir, exist_ok=True)
-        text_output_path = Path(out_dir) / f"translate_text_{int(time.time())}.txt"
-        print(f"[DEBUG] Saving to: {text_output_path}")
+        # os.makedirs(out_dir, exist_ok=True)
+        # text_output_path = Path(out_dir) / f"translate_text_{int(time.time())}.txt"
+        # print(f"[DEBUG] Saving to: {text_output_path}")
         
-        try:
-            with open(text_output_path, 'w', encoding='utf-8') as f:
-                f.write("=== Translation Results ===\n")
-                if session_id:
-                    f.write(f"Session ID: {session_id}\n")
-                f.write(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("=" * 60 + "\n\n")
-                for i, text in enumerate(recv_text, 1):
-                    f.write(f"{i}. {text}\n")
-                f.write("\n" + "=" * 60 + "\n")
-                f.write("Full text:\n")
-                f.write(' '.join(recv_text))
-            logging.info(f"Translation text saved as: {text_output_path}")
-            print(f"\n[SAVE] Translation text saved to: {text_output_path}")
-            print(f"[SAVE] File size: {os.path.getsize(text_output_path)} bytes")
-        except Exception as e:
-            logging.error(f"Save text file: {e}")
-            print(f"[ERROR] Failed to save: {e}")
+        # try:
+        #     with open(text_output_path, 'w', encoding='utf-8') as f:
+        #         f.write("=== Translation Results ===\n")
+        #         if session_id:
+        #             f.write(f"Session ID: {session_id}\n")
+        #         f.write(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        #         f.write("=" * 60 + "\n\n")
+        #         for i, text in enumerate(recv_text, 1):
+        #             f.write(f"{i}. {text}\n")
+        #         f.write("\n" + "=" * 60 + "\n")
+        #         f.write("Full text:\n")
+        #         f.write(' '.join(recv_text))
+        #     logging.info(f"Translation text saved as: {text_output_path}")
+        #     print(f"\n[SAVE] Translation text saved to: {text_output_path}")
+        #     print(f"[SAVE] File size: {os.path.getsize(text_output_path)} bytes")
+        # except Exception as e:
+        #     logging.error(f"Save text file: {e}")
+        #     print(f"[ERROR] Failed to save: {e}")
     else:
         print("\n[DEBUG] recv_text is empty, nothing to save")
 

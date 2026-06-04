@@ -39,6 +39,9 @@ class TranslatorAdapter:
             self.error_callback(msg)
     
     def _translate(self, text):
+        import time
+        timestamp = time.strftime("%H:%M:%S.%f")
+        print(f"[{timestamp}] TranslatorAdapter._translate called with text: '{text[:50]}...'")
         if self.translate_callback:
             self.translate_callback(text)
     
@@ -246,6 +249,8 @@ class TranslatorAdapter:
             # Receive responses
             audio_buffer = bytearray()
             last_audio_seq = -1
+            pending_text = ""  # Buffer for accumulating partial text
+            last_output_text = ""  # Track last output text to avoid duplicates
             
             try:
                 while self.running:
@@ -264,7 +269,37 @@ class TranslatorAdapter:
                     
                     if resp.event in [651, 654, 655]:
                         if resp.text.strip():
-                            self._translate(resp.text)
+                            # 651: Partial/incremental result (accumulate only)
+                            # 654: Sentence-level result (accumulate only)
+                            # 655: Final result (output complete sentence)
+                            
+                            if resp.event == 655:
+                                # 收到最终结果时，直接使用当前文本，不再累加
+                                # 防止服务器重复返回导致重复输出
+                                current_text = resp.text.strip()
+                                
+                                # 检查是否是完整句子（以句末标点结尾）
+                                if current_text and (
+                                    current_text.endswith('。') or
+                                    current_text.endswith('.') or
+                                    current_text.endswith('?') or
+                                    current_text.endswith('！') or
+                                    current_text.endswith('!')
+                                ):
+                                    # 检查是否与上次输出相同，避免重复
+                                    if current_text != last_output_text:
+                                        self._translate(current_text)
+                                        last_output_text = current_text
+                                    pending_text = ""  # 重置累积缓冲区
+                                elif len(current_text) > 50:
+                                    # 如果文本很长但没有句末标点，也输出
+                                    if current_text != last_output_text:
+                                        self._translate(current_text)
+                                        last_output_text = current_text
+                                    pending_text = ""  # 重置累积缓冲区
+                            else:
+                                # 非最终结果，累积到缓冲区
+                                pending_text += resp.text
                     
                     elif resp.event == 352:
                         if len(resp.data) > 0:

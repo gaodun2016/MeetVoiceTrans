@@ -390,6 +390,9 @@ class MainWindow(QMainWindow):
         self.update_status("Translation stopped. Ready.")
     
     def on_translate(self, text):
+        import time
+        timestamp = time.strftime("%H:%M:%S.%f")
+        print(f"[{timestamp}] MainWindow.on_translate called with text: '{text[:50]}...'")
         self.output_text.append(f"> {text}")
         # Auto scroll to bottom
         scroll_bar = self.output_text.verticalScrollBar()
@@ -409,7 +412,7 @@ class MainWindow(QMainWindow):
                 f"Failed to connect to translation server:\n\n{error}\n\n"
                 "Please check:\n"
                 "1. Your network connection\n"
-                "2. The server URL in translator.py\n"
+                "2. The server URL in meet_translator.py\n"
                 "3. Your API Key is valid")
         else:
             QMessageBox.critical(self, "Error", error)
