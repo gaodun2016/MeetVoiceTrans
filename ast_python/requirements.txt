@@ -1,0 +1,6 @@
+websockets==11.0.3
+sounddevice==0.4.6
+numpy==1.26.4
+pydub==0.25.1
+protobuf==4.25.3
+PyQt6==6.7.0
