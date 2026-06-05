@@ -1,4 +1,5 @@
-websockets==11.0.3
+websockets==16.0
+aiohttp==3.9.5
 sounddevice==0.4.6
 numpy==1.26.4
 pydub==0.25.1

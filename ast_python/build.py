@@ -1,10 +1,16 @@
 """
 macOS 和 Windows 打包配置
 使用 PyInstaller 将应用打包成可执行文件
+
+已包含所有依赖：
+- portaudio (音频输入)
+- ffmpeg (音频解码，用于 opus/ogg 格式)
+- 所有 Python 库
 """
 
 import subprocess
 import os
+import platform
 
 # 获取脚本所在目录
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -15,6 +21,24 @@ os.environ['PYINSTALLER_CONFIG_DIR'] = os.path.join(script_dir, '.pyinstaller_ca
 
 # 获取 portaudio 库路径
 portaudio_path = '/Users/admin/Library/Python/3.11/lib/python/site-packages/_sounddevice_data/portaudio-binaries/libportaudio.dylib'
+
+# 获取 ffmpeg 路径（用于解码 opus/ogg 音频）
+ffmpeg_path = ''
+if platform.system() == 'Darwin':
+    # macOS 系统
+    # 尝试从多个位置查找 ffmpeg
+    possible_ffmpeg_paths = [
+        '/opt/homebrew/bin/ffmpeg',
+        '/usr/local/bin/ffmpeg',
+        '/usr/bin/ffmpeg',
+    ]
+    for path in possible_ffmpeg_paths:
+        if os.path.exists(path):
+            ffmpeg_path = path
+            break
+elif platform.system() == 'Windows':
+    # Windows 系统
+    ffmpeg_path = 'C:\\ffmpeg\\bin\\ffmpeg.exe'
 
 # PyInstaller 命令
 cmd = [
@@ -50,12 +74,22 @@ cmd = [
     '--hidden-import=uuid',
     '--hidden-import=logging',
     '--hidden-import=logging.handlers',
+    '--hidden-import=pydub',
+    '--hidden-import=opuslib',
     '--specpath=' + script_dir,
     '--workpath=' + os.path.join(script_dir, 'build'),
     '--distpath=' + os.path.join(script_dir, 'dist'),
     '--clean',
     '-y',
 ]
+
+# 如果找到 ffmpeg，添加到打包中
+if ffmpeg_path and os.path.exists(ffmpeg_path):
+    cmd.append(f'--add-binary={ffmpeg_path}:ffmpeg')
+    print(f"[INFO] Found ffmpeg at: {ffmpeg_path}")
+else:
+    print("[WARNING] ffmpeg not found! Audio playback may not work correctly.")
+    print("Please install ffmpeg: brew install ffmpeg (macOS) or download from ffmpeg.org")
 
 # 检查图标文件
 if not os.path.exists('icon.icns'):

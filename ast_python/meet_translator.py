@@ -29,6 +29,48 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # 计算 python_protogen 目录的路径
 protogen_dir = os.path.join(current_dir, "python_protogen")
 
+# 设置 pydub 使用打包后的 ffmpeg
+# 在打包后的应用中，ffmpeg 可能在以下位置：
+# 1. 当前目录下的 ffmpeg 子目录
+# 2. PyInstaller 打包的 Frameworks 目录
+# 3. 系统路径
+
+# 尝试多个可能的 ffmpeg 路径
+possible_ffmpeg_paths = [
+    os.path.join(current_dir, 'ffmpeg', 'ffmpeg'),
+    os.path.join(current_dir, '..', 'Frameworks', 'ffmpeg', 'ffmpeg'),
+    os.path.join(current_dir, 'Frameworks', 'ffmpeg', 'ffmpeg'),
+]
+
+# 添加到环境变量 PATH
+for ffmpeg_dir in possible_ffmpeg_paths:
+    ffmpeg_dir = os.path.dirname(ffmpeg_dir)
+    if os.path.exists(ffmpeg_dir):
+        os.environ['PATH'] = ffmpeg_dir + os.pathsep + os.environ['PATH']
+
+# 尝试导入 pydub 并设置 ffmpeg 路径
+try:
+    from pydub import AudioSegment
+    
+    # 查找可用的 ffmpeg
+    import shutil
+    ffmpeg_path = shutil.which('ffmpeg')
+    
+    # 如果在系统路径中找不到，尝试打包路径
+    if not ffmpeg_path:
+        for path in possible_ffmpeg_paths:
+            if os.path.exists(path):
+                ffmpeg_path = path
+                break
+    
+    if ffmpeg_path:
+        AudioSegment.converter = ffmpeg_path
+        print(f"[INFO] Using ffmpeg: {ffmpeg_path}")
+    else:
+        print("[WARNING] ffmpeg not found! Audio playback may not work correctly.")
+except ImportError:
+    pass
+
 # 只添加一次 python_protogen 目录
 sys.path.append(protogen_dir)
 
