@@ -385,8 +385,18 @@ async def translate_v4_microphone(conf: Config, out_dir: str = "output", output_
             max_size = 1000000000,
             ping_interval = None
         )
-        logging.info(f"Connected to server (log id={conn.response.headers.get('X-Tt-Logid')})")
-        log_id = conn.response.headers.get('X-Tt-Logid')
+        # Get log_id from response headers
+        log_id = None
+        try:
+            log_id = conn.response.headers.get('X-Tt-Logid')
+        except:
+            try:
+                # websockets 16+ uses different attribute name
+                if hasattr(conn, 'response'):
+                    log_id = conn.response.headers.get('X-Tt-Logid')
+            except:
+                pass
+        logging.info(f"Connected to server (log id={log_id})")
     except Exception as e:
         logging.error(f"Connect: {e}")
         # Better error handling - don't assume e.response exists
@@ -494,10 +504,13 @@ async def translate_v4_microphone(conf: Config, out_dir: str = "output", output_
             resp = await receive_message(conn)
             
             # Debug: print all events
-            print(f"[DEBUG] Received event type: {resp.event}, text length: {len(resp.text) if resp.text else 0}")
+            event_type = resp.event if resp.event is not None else "None"
+            text_len = len(resp.text) if resp.text is not None else 0
+            print(f"[DEBUG] Received event type: {event_type}, text length: {text_len}")
 
             if resp.event == Type.SessionFailed or resp.event == Type.SessionCanceled:
-                logging.error(f"Session failed - logid: {log_id}, message: {resp.message}")
+                msg = str(resp.message) if resp.message is not None else ""
+                logging.error(f"Session failed - logid: {log_id}, message: {msg}")
                 break
 
             if resp.event == Type.SessionFinished:
@@ -509,19 +522,22 @@ async def translate_v4_microphone(conf: Config, out_dir: str = "output", output_
 
             # Log translation results with detailed information
             if resp.event in [651, 654, 655]:  # Subtitle events
-                if resp.text.strip():
+                text_content = str(resp.text) if resp.text is not None else ""
+                session_id_str = str(resp.session_id) if resp.session_id is not None else ""
+                seq_val = resp.sequence if resp.sequence is not None else 0
+                if text_content.strip():
                     # Print translation result with more details
                     print("-" * 60)
                     print(f"[TRANSLATION RESULT]")
-                    print(f"  Event Type: {resp.event}")
-                    print(f"  Session ID: {resp.session_id[:8]}...")
-                    print(f"  Sequence: {resp.sequence}")
-                    print(f"  Text: {resp.text}")
+                    print(f"  Event Type: {event_type}")
+                    print(f"  Session ID: {session_id_str[:8]}..." if session_id_str else "  Session ID: None")
+                    print(f"  Sequence: {seq_val}")
+                    print(f"  Text: {text_content}")
                     print("-" * 60)
-                    logging.info(f"[Translation] Seq={resp.sequence} | {resp.text}")
-                    recv_text.append(resp.text)
+                    logging.info(f"[Translation] Seq={seq_val} | {text_content}")
+                    recv_text.append(text_content)
             elif resp.event == 352:  # TTS audio chunk
-                if len(resp.data) > 0:
+                if resp.data is not None and len(resp.data) > 0:
                     audio_buffer.extend(resp.data)  # Accumulate audio chunks
                     recv_audio.extend(resp.data)
                     logging.info(f"[Audio] Received {len(resp.data)} bytes of TTS audio")
@@ -537,11 +553,13 @@ async def translate_v4_microphone(conf: Config, out_dir: str = "output", output_
                     #     print(f"[ERROR] Failed to save audio: {e}")
             elif resp.event == 351:  # Audio end marker
                 # Check for duplicate sequence
-                import time
-                timestamp = time.strftime("%H:%M:%S.%f")
-                if resp.sequence == last_audio_seq:
-                    print(f"[{timestamp}] [AUDIO END] Duplicate sequence {resp.sequence}, skipping...")
-                    recv_audio.extend(resp.data)
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%H:%M:%S.%f")
+                seq_value = resp.sequence if resp.sequence is not None else -1
+                if seq_value == last_audio_seq:
+                    print(f"[{timestamp}] [AUDIO END] Duplicate sequence {seq_value}, skipping...")
+                    if resp.data is not None:
+                        recv_audio.extend(resp.data)
                     logging.info(f"Event 351: ")
                     continue
                 
@@ -561,20 +579,24 @@ async def translate_v4_microphone(conf: Config, out_dir: str = "output", output_
                     # Clear buffer immediately after sending
                     audio_buffer.clear()
                     print(f"[{timestamp}] [AUDIO BUFFER] Cleared, size: {len(audio_buffer)}")
-                    last_audio_seq = resp.sequence
+                    last_audio_seq = seq_value
                 else:
                     print(f"[{timestamp}] [AUDIO END] Audio buffer is empty, skipping...")
-                recv_audio.extend(resp.data)
+                if resp.data is not None:
+                    recv_audio.extend(resp.data)
                 logging.info(f"Event 351: ")
             else:
                 # Print other events with details
-                if resp.text and resp.text.strip():
+                text_content = str(resp.text) if resp.text is not None else ""
+                if text_content.strip():
                     print(f"[OTHER EVENT] Type={resp.event}, Session={resp.session_id[:8]}...")
-                    print(f"  Message: {resp.text[:200]}..." if len(resp.text) > 200 else f"  Message: {resp.text}")
-                logging.info(f"Event {resp.event}: {resp.text[:100]}..." if len(str(resp.text)) > 100 else f"Event {resp.event}: {resp.text}")
+                    print(f"  Message: {text_content[:200]}..." if len(text_content) > 200 else f"  Message: {text_content}")
+                logging.info(f"Event {resp.event}: {text_content[:100]}..." if len(text_content) > 100 else f"Event {resp.event}: {text_content}")
 
     except Exception as e:
+        import traceback
         logging.error(f"Receive message error: {e}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
     finally:
         # Stop recording
         recording = False
