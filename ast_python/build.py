@@ -70,6 +70,7 @@ cmd = [
     '--hidden-import=aiohttp.web_exceptions',
     '--hidden-import=aiohttp.web_protocol',
     '--hidden-import=aiohttp.web_server',
+    '--hidden-import=requests',
     '--hidden-import=asyncio',
     '--hidden-import=uuid',
     '--hidden-import=logging',

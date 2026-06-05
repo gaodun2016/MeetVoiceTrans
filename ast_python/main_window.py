@@ -6,7 +6,8 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QTextEdit, QStatusBar, QMenuBar, QMenu,
-    QMessageBox, QComboBox, QLabel, QSplitter, QDialog
+    QMessageBox, QComboBox, QLabel, QSplitter, QDialog,
+    QLineEdit
 )
 from PyQt6.QtGui import QFont, QIcon, QAction
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -17,6 +18,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "python_protogen"))
 from translator_adapter import TranslatorAdapter
 from config import Config
 from settings_dialog import SettingsDialog
+# from license_manager import LicenseManager  # 暂时注释掉卡密功能
 
 class AudioPlayer(QThread):
     def __init__(self, device_id=None):
@@ -130,7 +132,9 @@ class MainWindow(QMainWindow):
         self.config = Config()
         self.translator_thread = None
         self.audio_player = None
+        # self.license_manager = LicenseManager()  # 暂时注释掉卡密功能
         self.init_ui()
+        # self.check_license()  # 暂时注释掉卡密功能
     
     def init_ui(self):
         self.setWindowTitle("Meet Translator")
@@ -164,6 +168,52 @@ class MainWindow(QMainWindow):
         subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle_label.setStyleSheet("color: #666;")
         main_layout.addWidget(subtitle_label)
+        
+        # License Panel - temporarily commented out for debugging
+        # license_widget = QWidget()
+        # license_widget.setStyleSheet("background-color: #f8f9fa; padding: 15px; border-radius: 8px;")
+        # license_layout = QHBoxLayout(license_widget)
+        # license_layout.setSpacing(15)
+        # license_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # 
+        # # License Key Input
+        # self.license_input = QLineEdit()
+        # self.license_input.setPlaceholderText("请输入卡密")
+        # self.license_input.setFont(QFont("Arial", 12))
+        # self.license_input.setStyleSheet("""
+        #     QLineEdit {
+        #         padding: 8px 12px;
+        #         border: 1px solid #ddd;
+        #         border-radius: 6px;
+        #         min-width: 300px;
+        #     }
+        # """)
+        # license_layout.addWidget(self.license_input)
+        # 
+        # # Activate Button
+        # self.activate_btn = QPushButton("激活")
+        # self.activate_btn.setFont(QFont("Arial", 12))
+        # self.activate_btn.setStyleSheet("""
+        #     QPushButton {
+        #         background-color: #27ae60;
+        #         color: white;
+        #         padding: 8px 24px;
+        #         border-radius: 6px;
+        #         border: none;
+        #     }
+        #     QPushButton:hover {
+        #         background-color: #1e8449;
+        #     }
+        # """)
+        # self.activate_btn.clicked.connect(self.activate_license)
+        # license_layout.addWidget(self.activate_btn)
+        # 
+        # # License Status
+        # self.license_status = QLabel()
+        # self.license_status.setFont(QFont("Arial", 12))
+        # license_layout.addWidget(self.license_status)
+        # 
+        # main_layout.addWidget(license_widget)
         
         # Control panel
         control_layout = QHBoxLayout()
@@ -317,6 +367,38 @@ class MainWindow(QMainWindow):
         QMessageBox.about(self, "About Meet Translator", 
             "Meet Translator\n\nReal-time speech translation for meetings.\n\nVersion 1.0.0")
     
+    # def check_license(self):
+    #     """检查许可证状态"""
+    #     self.license_manager.load_license()
+    #     
+    #     if self.license_manager.is_valid():
+    #         remaining_days = self.license_manager.get_remaining_days()
+    #         expire_str = self.license_manager.get_expire_str()
+    #         card_name = self.license_manager.get_card_name()
+    #         
+    #         self.license_status.setText(f"<span style='color: #27ae60;'>✓ {card_name} - 有效期至: {expire_str} (剩余{remaining_days}天)</span>")
+    #         self.license_input.setEnabled(False)
+    #         self.activate_btn.setEnabled(False)
+    #     else:
+    #         self.license_status.setText("<span style='color: #e74c3c;'>✗ 未激活或已过期</span>")
+    #         self.license_input.setEnabled(True)
+    #         self.activate_btn.setEnabled(True)
+    # 
+    # def activate_license(self):
+    #     """激活卡密"""
+    #     key = self.license_input.text().strip()
+    #     if not key:
+    #         QMessageBox.warning(self, "Warning", "请输入卡密")
+    #         return
+    #     
+    #     success, message, valid_until, card_type = self.license_manager.activate_key(key)
+    #     
+    #     if success:
+    #         QMessageBox.information(self, "Success", message)
+    #         self.check_license()
+    #     else:
+    #         QMessageBox.warning(self, "Error", message)
+    
     def toggle_translation(self):
         if self.translator_thread and self.translator_thread.isRunning():
             self.stop_translation()
@@ -328,6 +410,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "Please set X-Api-Key in Settings")
             self.show_settings()
             return
+        
+        # 检查许可证 - temporarily commented out for debugging
+        # if not self.license_manager.is_valid():
+        #     QMessageBox.warning(self, "License Required", "请先激活许可证")
+        #     return
         
         self.action_button.setText("Stop Translation")
         self.action_button.setStyleSheet("""

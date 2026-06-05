@@ -421,11 +421,19 @@ async def translate_v4_microphone(conf: Config, out_dir: str = "output", output_
     try:
         conn_id = str(uuid.uuid4())
         headers = await build_http_headers(conf, conn_id)
+        
+        # Create SSL context with certificate verification options
+        import ssl
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        
         conn = await websockets.connect(
             conf.ws_url,
             additional_headers=headers,
             max_size = 1000000000,
-            ping_interval = None
+            ping_interval = None,
+            ssl=ssl_context
         )
         logging.info(f"Connected to server (log id={conn.response.headers.get('X-Tt-Logid')})")
         log_id = conn.response.headers.get('X-Tt-Logid')

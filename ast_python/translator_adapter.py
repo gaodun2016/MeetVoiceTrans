@@ -103,12 +103,19 @@ class TranslatorAdapter:
             
             self._status(f"Connecting to {conf.ws_url}")
             
+            # Create SSL context to bypass certificate verification issues
+            import ssl
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
             try:
                 conn = await websockets.connect(
                     conf.ws_url,
                     additional_headers=headers,
                     max_size=1000000000,
-                    ping_interval=None
+                    ping_interval=None,
+                    ssl=ssl_context
                 )
                 log_id = conn.response.headers.get('X-Tt-Logid')
                 self._status(f"Connected to server (log_id={log_id})")
