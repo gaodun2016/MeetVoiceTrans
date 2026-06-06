@@ -22,6 +22,7 @@ class TranslatorAdapter:
         self.status_callback = None
         self.error_callback = None
         self.audio_callback = None
+        self.conn = None  # WebSocket connection reference
     
     def set_callbacks(self, translate_callback=None, status_callback=None, 
                      error_callback=None, audio_callback=None):
@@ -29,6 +30,22 @@ class TranslatorAdapter:
         self.status_callback = status_callback
         self.error_callback = error_callback
         self.audio_callback = audio_callback
+    
+    def set_translate_callback(self, callback):
+        """Set translate callback (for backward compatibility)"""
+        self.translate_callback = callback
+    
+    def set_error_callback(self, callback):
+        """Set error callback (for backward compatibility)"""
+        self.error_callback = callback
+    
+    def set_status_callback(self, callback):
+        """Set status callback (for backward compatibility)"""
+        self.status_callback = callback
+    
+    async def start(self):
+        """Start translation (alias for run)"""
+        await self.run()
     
     def _status(self, msg):
         if self.status_callback:
@@ -117,6 +134,7 @@ class TranslatorAdapter:
                     ping_interval=None,
                     ssl=ssl_context
                 )
+                self.conn = conn  # Save connection reference for stop()
                 log_id = conn.response.headers.get('X-Tt-Logid')
                 self._status(f"Connected to server (log_id={log_id})")
             except Exception as e:
@@ -376,5 +394,13 @@ class TranslatorAdapter:
                 output_stream.stop()
                 output_stream.close()
     
-    def stop(self):
+    async def stop(self):
+        """Stop translation and close connection"""
         self.running = False
+        # 主动关闭 WebSocket 连接以中断等待
+        if self.conn:
+            try:
+                await self.conn.close()
+            except Exception as e:
+                pass
+        self.conn = None

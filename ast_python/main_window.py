@@ -24,13 +24,15 @@ from license_manager import LicenseManager
 class TranslatorThread(QThread):
     translation_result = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
+    status_changed = pyqtSignal(str)  # New signal for status updates
     
     def __init__(self, api_key, output_device=None):
         super().__init__()
         self.api_key = api_key
         self.output_device = output_device
         self.running = False
-        
+        self.adapter = None  # Reference to TranslatorAdapter
+    
     def run(self):
         self.running = True
         try:
@@ -39,24 +41,35 @@ class TranslatorThread(QThread):
             self.error_occurred.emit(str(e))
             
     async def translate(self):
-        adapter = TranslatorAdapter(self.api_key, self.output_device)
+        self.adapter = TranslatorAdapter(self.api_key, self.output_device)
         
         def callback(text):
             if self.running:
                 self.translation_result.emit(text)
                 
-        adapter.set_translate_callback(callback)
+        self.adapter.set_translate_callback(callback)
         
         def error_callback(error):
             if self.running:
                 self.error_occurred.emit(error)
                 
-        adapter.set_error_callback(error_callback)
+        self.adapter.set_error_callback(error_callback)
         
-        await adapter.start()
+        def status_callback(status):
+            self.status_changed.emit(status)
+            
+        self.adapter.set_status_callback(status_callback)
+        
+        await self.adapter.start()
         
     def stop(self):
         self.running = False
+        # 异步调用 adapter.stop()
+        if self.adapter:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.adapter.stop())
+            loop.close()
         self.wait()
 
 class MainWindow(QMainWindow):
@@ -304,30 +317,28 @@ class MainWindow(QMainWindow):
             # Convert combo index to device index (skip "Default Speaker")
             output_device = index - 1
         
+        # Show loading state immediately
+        self.start_btn.setText("Connecting...")
+        self.start_btn.setEnabled(False)
+        self.status_bar.showMessage("Connecting to server...")
+        
+        # Start translation in background
         self.translator_thread = TranslatorThread(api_key, output_device)
         self.translator_thread.translation_result.connect(self.update_output)
         self.translator_thread.error_occurred.connect(self.show_error)
+        self.translator_thread.status_changed.connect(self.on_translator_status_changed)
         self.translator_thread.finished.connect(self.on_translation_finished)
         self.translator_thread.start()
         
-        self.start_btn.setText("Stop Translation")
-        self.start_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #e74c3c;
-                color: white;
-                padding: 15px 40px;
-                border: none;
-                border-radius: 8px;
-            }
-            QPushButton:hover {
-                background-color: #c0392b;
-            }
-        """)
-        self.status_bar.showMessage("Translating...")
         self.output_text.clear()
     
     def stop_translation(self):
         if self.translator_thread:
+            # Show stopping state immediately
+            self.start_btn.setText("Stopping...")
+            self.start_btn.setEnabled(False)
+            self.status_bar.showMessage("Stopping...")
+            
             self.translator_thread.stop()
             self.translator_thread = None
         
@@ -355,6 +366,27 @@ class MainWindow(QMainWindow):
     
     def show_error(self, error):
         self.output_text.append(f"[ERROR] {error}")
+    
+    def on_translator_status_changed(self, status):
+        """Handle translator status changes"""
+        self.status_bar.showMessage(status)
+        
+        # When session starts successfully, update button to Stop Translation
+        if "Session started" in status or "recording" in status.lower():
+            self.start_btn.setText("Stop Translation")
+            self.start_btn.setEnabled(True)
+            self.start_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #e74c3c;
+                    color: white;
+                    padding: 15px 40px;
+                    border: none;
+                    border-radius: 8px;
+                }
+                QPushButton:hover {
+                    background-color: #c0392b;
+                }
+            """)
     
     def on_translation_finished(self):
         self.stop_translation()
