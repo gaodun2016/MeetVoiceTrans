@@ -15,8 +15,9 @@ import logging
 import platform
 import uuid
 
-# 密钥版本号
-LICENSE_VERSION = "v2"  # 升级到 v2，支持设备绑定
+# 密钥签名密钥（用于验证密钥合法性）
+# 生产环境应使用更安全的密钥管理方式
+SIGNING_KEY = "MeetTranslator@2024#SecureKey"
 
 # 时间常量
 HOUR_SECONDS = 60 * 60
@@ -77,28 +78,37 @@ class LicenseManager:
             # 如果获取失败，返回一个默认值（降低安全性但保证可用性）
             return "default_device"
     
-    def generate_key(self, card_type, days=0, device_id=None):
+    def generate_key(self, card_type, days=0, seconds=0, device_id=None):
         """
         生成密钥（管理员使用）
-        card_type: day/week/month/year
-        days: 自定义天数（可选，用于生成特定天数的密钥）
+        card_type: trial/day/week/month/year/custom
+        days: 自定义天数（可选）
+        seconds: 自定义秒数（可选，用于生成短有效期测试卡）
         device_id: 设备 ID（可选，绑定特定设备）
+        
+        密钥格式：card_type:duration[:device_id]:signature
+        有效期在激活时开始计算，而非生成时
         """
-        if days > 0:
+        # 根据参数计算有效期时长
+        if seconds > 0:
+            # 自定义秒数（用于测试卡）
+            duration = seconds
+        elif days > 0:
             duration = days * DAY_SECONDS
+        elif card_type == 'custom':
+            raise ValueError("请指定 --days 或 --seconds 参数")
         elif card_type in CARD_TYPES:
             duration = CARD_TYPES[card_type]['duration']
         else:
             raise ValueError(f"Unknown card type: {card_type}")
         
-        # 计算过期时间（从当前时间加上有效期）
-        expire_time = int(time.time()) + duration
-        
-        # 生成密钥数据（如果有设备 ID 则绑定）
+        # 生成密钥数据（格式：card_type:duration[:device_id]）
+        # 注意：这里存储的是有效期时长(duration)，而非过期时间
+        # 过期时间在激活时计算：当前时间 + duration
         if device_id:
-            data = f"{LICENSE_VERSION}:{card_type}:{expire_time}:{device_id}"
+            data = f"{card_type}:{duration}:{device_id}"
         else:
-            data = f"{LICENSE_VERSION}:{card_type}:{expire_time}"
+            data = f"{card_type}:{duration}"
         
         # 生成签名
         signature = self._sign(data)
@@ -125,6 +135,12 @@ class LicenseManager:
         """
         激活密钥
         返回: (success, message, valid_until, card_type)
+        
+        密钥格式：
+        card_type:duration:signature (无设备绑定，3部分)
+        card_type:duration:device_id:signature (有设备绑定，4部分)
+        
+        有效期在激活时开始计算，而非生成时
         """
         try:
             # Base64 解码
@@ -133,30 +149,19 @@ class LicenseManager:
             # 解析密钥
             parts = decoded_key.split(':')
             
-            # 支持两种密钥格式
-            # v1: version:card_type:expire_time:signature (旧格式，无设备绑定)
-            # v2: version:card_type:expire_time:device_id:signature (新格式，有设备绑定)
-            # v2: version:card_type:expire_time:signature (新格式，无设备绑定)
+            # 密钥格式：
+            # card_type:duration:signature (无设备绑定，3部分)
+            # card_type:duration:device_id:signature (有设备绑定，4部分)
             
-            if len(parts) == 5:
-                # 新格式，带设备绑定
-                version, card_type, expire_time_str, device_id, signature = parts
-            elif len(parts) == 4:
-                # 需要区分是 v1 还是 v2 格式
-                if parts[0] == "v1":
-                    # v1 格式，无设备绑定
-                    version, card_type, expire_time_str, signature = parts
-                    device_id = None
-                else:
-                    # v2 格式，无设备绑定
-                    version, card_type, expire_time_str, signature = parts
-                    device_id = None
+            if len(parts) == 4:
+                # 带设备绑定的格式
+                card_type, duration_str, device_id, signature = parts
+            elif len(parts) == 3:
+                # 无设备绑定的格式
+                card_type, duration_str, signature = parts
+                device_id = None
             else:
                 return False, "无效的密钥格式", 0, ''
-            
-            # 验证版本（支持 v1 和 v2）
-            if version not in ["v1", "v2"]:
-                return False, "密钥版本不兼容", 0, ''
             
             # 获取当前设备 ID
             current_device = self.get_device_fingerprint()
@@ -166,27 +171,24 @@ class LicenseManager:
                 return False, "该卡密已绑定其他设备，无法在此设备使用", 0, ''
             
             # 生成验证用的数据
-            if len(parts) == 5:
-                data = f"{version}:{card_type}:{expire_time_str}:{device_id}"
+            if len(parts) == 4:
+                data = f"{card_type}:{duration_str}:{device_id}"
             else:
-                data = f"{version}:{card_type}:{expire_time_str}"
+                data = f"{card_type}:{duration_str}"
             
             # 验证签名
             if not self._verify_signature(data, signature):
                 return False, "密钥签名无效", 0, ''
             
-            # 获取网络时间
+            # 获取网络时间（作为激活时间）
             network_time = self._get_network_time()
             if network_time == 0:
                 # 如果无法获取网络时间，使用本地时间（不太安全）
                 network_time = int(time.time())
             
-            # 解析过期时间
-            expire_time = int(expire_time_str)
-            
-            # 检查是否过期
-            if network_time > expire_time:
-                return False, "密钥已过期", 0, ''
+            # 计算过期时间：激活时间 + 有效期时长
+            duration = int(duration_str)
+            expire_time = network_time + duration
             
             # 保存许可证
             self.valid_until = expire_time
@@ -212,27 +214,37 @@ class LicenseManager:
         """获取网络时间（使用 HTTPS + 多服务器交叉验证）"""
         try:
             # 使用 HTTPS 加密传输，防止中间人攻击
+            # 格式：(URL, 类型)
+            # 类型: 'json' - 从 JSON 响应获取时间戳
+            # 类型: 'header' - 从响应头获取时间
+            # 类型: 'suning' - 从苏宁接口获取时间
             servers = [
-                'https://worldtimeapi.org/api/timezone/Asia/Shanghai',
-                'https://api.pingxx.com/time',
-                'https://www.baidu.com',
-                'https://www.google.com',
+                ('https://api.pingxx.com/time', 'json'),       # Ping++ - 返回 {"timestamp": ...}
+                ('https://quan.suning.com/getSysTime.do', 'suning'),  # 苏宁 - 返回 {"sysTime2": "2024-03-20 15:30:00"}
+                ('https://www.baidu.com', 'header'),           # 百度
+                ('https://www.taobao.com', 'header'),          # 淘宝
+                ('https://www.aliyun.com', 'header'),          # 阿里云
             ]
             
             times = []
             
-            for server in servers:
+            for server, server_type in servers:
                 try:
-                    # 禁用 SSL 证书验证（解决打包后证书问题）
-                    response = requests.get(server, timeout=5, verify=False)
+                    response = requests.get(server, timeout=2, verify=False)
                     timestamp = None
                     
-                    if server == 'https://worldtimeapi.org/api/timezone/Asia/Shanghai':
+                    if server_type == 'json':
+                        # 解析 JSON 时间戳
                         data = response.json()
-                        timestamp = int(data['unixtime'])
-                    elif server == 'https://api.pingxx.com/time':
+                        timestamp = int(data.get('timestamp', 0))
+                    elif server_type == 'suning':
+                        # 解析苏宁时间格式
                         data = response.json()
-                        timestamp = int(data['timestamp'])
+                        sys_time2 = data.get('sysTime2', '')
+                        if sys_time2:
+                            from datetime import datetime
+                            dt = datetime.strptime(sys_time2, '%Y-%m-%d %H:%M:%S')
+                            timestamp = int(dt.timestamp())
                     else:
                         # 从响应头获取时间
                         date_header = response.headers.get('Date')
@@ -395,6 +407,8 @@ def main():
   %(prog)s --type month --count 3         生成3张月卡
   %(prog)s --type year --count 1          生成1张年卡
   %(prog)s --days 15 --count 20           生成20张15天卡
+  %(prog)s --seconds 60 --count 5        生成5张1分钟测试卡
+  %(prog)s --type custom --seconds 120    生成1张2分钟测试卡
   %(prog)s --all                          生成所有类型各一张
   %(prog)s --batch 10 5 3 2 1            生成体验卡10张、天卡5张、周卡3张、月卡2张、年卡1张
   %(prog)s --type trial -c 100 -o keys.txt 生成100张体验卡并保存到文件
@@ -405,8 +419,8 @@ def main():
     
     parser.add_argument(
         '--type', '-t',
-        choices=['trial', 'day', 'week', 'month', 'year'],
-        help='卡类型: trial(体验卡1小时), day(天卡), week(周卡), month(月卡), year(年卡)'
+        choices=['trial', 'day', 'week', 'month', 'year', 'custom'],
+        help='卡类型: trial(体验卡1小时), day(天卡), week(周卡), month(月卡), year(年卡), custom(自定义秒数)'
     )
     
     parser.add_argument(
@@ -421,6 +435,13 @@ def main():
         type=int,
         default=0,
         help='自定义天数 (可选)'
+    )
+    
+    parser.add_argument(
+        '--seconds', '-s',
+        type=int,
+        default=0,
+        help='自定义秒数 (可选，用于生成短有效期测试卡)'
     )
     
     parser.add_argument(
@@ -469,6 +490,26 @@ def main():
     
     keys = []
     
+    def _format_duration(duration):
+        """格式化时长显示"""
+        if duration < HOUR_SECONDS:
+            return f"{duration}秒"
+        elif duration < DAY_SECONDS:
+            hours = duration // HOUR_SECONDS
+            return f"{hours}小时"
+        elif duration < WEEK_SECONDS:
+            days = duration // DAY_SECONDS
+            return f"{days}天"
+        elif duration < MONTH_SECONDS:
+            weeks = duration // WEEK_SECONDS
+            return f"{weeks}周"
+        elif duration < YEAR_SECONDS:
+            months = duration // MONTH_SECONDS
+            return f"{months}个月"
+        else:
+            years = duration // YEAR_SECONDS
+            return f"{years}年"
+    
     # 生成所有类型各一张
     if args.all:
         print("=" * 60)
@@ -480,18 +521,18 @@ def main():
         for card_type in ['trial', 'day', 'week', 'month', 'year']:
             key = lm.generate_key(card_type, device_id=device_id)
             card_name = CARD_TYPES[card_type]['name']
-            expire_str = time.strftime('%Y-%m-%d %H:%M:%S', 
-                time.localtime(int(time.time()) + CARD_TYPES[card_type]['duration']))
+            duration = CARD_TYPES[card_type]['duration']
+            duration_str = _format_duration(duration)
             
             keys.append({
                 'type': card_type,
                 'name': card_name,
                 'key': key,
-                'expire': expire_str
+                'duration': duration_str
             })
             
             print(f"[{card_name}] 密钥: {key}")
-            print(f"    有效期至: {expire_str}")
+            print(f"    有效期时长: {duration_str} (激活时开始计时)")
             print()
     
     # 批量生成指定数量
@@ -518,25 +559,33 @@ def main():
         ]:
             for i in range(count):
                 key = lm.generate_key(card_type, device_id=device_id)
-                expire_str = time.strftime('%Y-%m-%d %H:%M:%S', 
-                    time.localtime(int(time.time()) + CARD_TYPES[card_type]['duration']))
+                duration = CARD_TYPES[card_type]['duration']
+                duration_str = _format_duration(duration)
                 
                 keys.append({
                     'type': card_type,
                     'name': name,
                     'key': key,
-                    'expire': expire_str
+                    'duration': duration_str
                 })
                 
                 print(f"[{name}-{i+1}] 密钥: {key}")
-                print(f"    有效期至: {expire_str}")
+                print(f"    有效期时长: {duration_str} (激活时开始计时)")
                 print()
     
     # 生成指定类型
     elif args.type:
         card_type = args.type
         count = args.count
-        card_name = CARD_TYPES[card_type]['name']
+        
+        # 处理 custom 类型
+        if card_type == 'custom':
+            if args.seconds <= 0:
+                print("错误: --type custom 需要配合 --seconds 参数使用")
+                return
+            card_name = f"{args.seconds}秒测试卡"
+        else:
+            card_name = CARD_TYPES[card_type]['name']
         
         print("=" * 60)
         print(f"批量生成密钥 - {card_name} x {count}")
@@ -545,26 +594,35 @@ def main():
         print("=" * 60)
         
         for i in range(count):
-            key = lm.generate_key(card_type, days=args.days, device_id=device_id)
+            key = lm.generate_key(card_type, days=args.days, seconds=args.seconds, device_id=device_id)
             
-            # 计算有效期
-            if args.days > 0:
-                expire_time = int(time.time()) + args.days * DAY_SECONDS
-                expire_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(expire_time))
+            # 计算有效期时长
+            if args.seconds > 0:
+                # 自定义秒数
+                duration = args.seconds
+                duration_str = _format_duration(duration)
+                card_name = f"{args.seconds}秒测试卡"
+            elif args.days > 0:
+                duration = args.days * DAY_SECONDS
+                duration_str = _format_duration(duration)
                 card_name = f"{args.days}天卡"
+            elif card_type == 'custom':
+                duration = args.seconds
+                duration_str = _format_duration(duration)
+                card_name = f"{args.seconds}秒测试卡"
             else:
-                expire_time = int(time.time()) + CARD_TYPES[card_type]['duration']
-                expire_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(expire_time))
+                duration = CARD_TYPES[card_type]['duration']
+                duration_str = _format_duration(duration)
             
             keys.append({
                 'type': card_type,
                 'name': card_name,
                 'key': key,
-                'expire': expire_str
+                'duration': duration_str
             })
             
             print(f"[{i+1}] 密钥: {key}")
-            print(f"    有效期至: {expire_str}")
+            print(f"    有效期时长: {duration_str} (激活时开始计时)")
             print()
     
     else:
@@ -590,7 +648,7 @@ def main():
             for k in keys:
                 f.write(f"[{k['name']}]\n")
                 f.write(f"密钥: {k['key']}\n")
-                f.write(f"有效期至: {k['expire']}\n")
+                f.write(f"有效期时长: {k['duration']} (激活时开始计时)\n")
                 f.write("\n")
             
             f.write("=" * 60 + "\n")

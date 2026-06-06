@@ -339,10 +339,27 @@ class MainWindow(QMainWindow):
             self.start_btn.setEnabled(False)
             self.status_bar.showMessage("Stopping...")
             
-            self.translator_thread.stop()
+            # 非阻塞方式停止线程
+            thread = self.translator_thread
             self.translator_thread = None
-        
+            
+            # 在单独的线程中等待线程结束，避免阻塞主线程
+            def wait_and_cleanup():
+                thread.stop()  # 这会阻塞等待线程结束，但不会阻塞主线程
+                thread.deleteLater()
+                # 在主线程中更新 UI
+                QTimer.singleShot(0, self._on_translation_stopped)
+            
+            import threading
+            wait_thread = threading.Thread(target=wait_and_cleanup, daemon=True)
+            wait_thread.start()
+        else:
+            self._on_translation_stopped()
+    
+    def _on_translation_stopped(self):
+        """翻译停止后的 UI 更新（在主线程中执行）"""
         self.start_btn.setText("Start Translation")
+        self.start_btn.setEnabled(True)
         self.start_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3498db;
