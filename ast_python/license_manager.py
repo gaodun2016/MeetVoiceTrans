@@ -251,10 +251,10 @@ class LicenseManager:
             # 类型: 'header' - 从响应头获取时间
             # 类型: 'suning' - 从苏宁接口获取时间
             servers = [
-                ('https://api.pingxx.com/time', 'json'),       # Ping++ - 返回 {"timestamp": ...}
+                # ('https://api.pingxx.com/time', 'json'),       # Ping++ - 返回 {"timestamp": ...}
                 # ('https://quan.suning.com/getSysTime.do', 'suning'),  # 苏宁 - 返回 {"sysTime2": "2024-03-20 15:30:00"}
                 ('https://www.baidu.com', 'header'),           # 百度
-                ('https://www.taobao.com', 'header'),          # 淘宝
+                # ('https://www.taobao.com', 'header'),          # 淘宝
                 ('https://www.aliyun.com', 'header'),          # 阿里云
             ]
             
