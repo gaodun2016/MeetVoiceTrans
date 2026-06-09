@@ -14,15 +14,22 @@ import numpy as np
 import sounddevice as sd
 
 class TranslatorAdapter:
-    def __init__(self, api_key, output_device=None):
+    def __init__(self, api_key, output_device=None, translation_enabled=True):
         self.api_key = api_key
         self.output_device = output_device
+        self.translation_enabled = translation_enabled
         self.running = False
         self.translate_callback = None
         self.status_callback = None
         self.error_callback = None
         self.audio_callback = None
         self.conn = None  # WebSocket connection reference
+    
+    def set_translation_enabled(self, enabled):
+        """Toggle translation without stopping connection"""
+        self.translation_enabled = enabled
+        status = "翻译功能已开启" if enabled else "翻译功能已关闭"
+        self._status(status)
     
     def set_callbacks(self, translate_callback=None, status_callback=None, 
                      error_callback=None, audio_callback=None):
@@ -245,12 +252,48 @@ class TranslatorAdapter:
                     while recording or not audio_queue.empty():
                         try:
                             audio_data = await asyncio.wait_for(audio_queue.get(), timeout=1.0)
-                            chunk_request = TranslateRequestData(
-                                session_id=session_id,
-                                event="Type_TaskRequest",
-                                source_audio=Audio(binary_data=audio_data)
-                            )
-                            await send_request(conn, chunk_request)
+                            
+                            if self.translation_enabled:
+                                # Send audio to server for translation
+                                chunk_request = TranslateRequestData(
+                                    session_id=session_id,
+                                    event="Type_TaskRequest",
+                                    source_audio=Audio(binary_data=audio_data)
+                                )
+                                await send_request(conn, chunk_request)
+                            else:
+                                # When translation is disabled, directly output microphone audio to virtual device
+                                # Need to resample from 16000Hz to 24000Hz
+                                if self.output_device is not None and self.output_device >= 0:
+                                    try:
+                                        # Convert bytes to numpy array
+                                        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                                        
+                                        # Resample from 16000Hz to 24000Hz
+                                        # Simple linear interpolation resampling
+                                        target_length = int(len(audio_array) * 24000 / 16000)
+                                        resampled = np.interp(
+                                            np.linspace(0, len(audio_array), target_length),
+                                            np.arange(len(audio_array)),
+                                            audio_array
+                                        ).astype(np.int16)
+                                        
+                                        # Output to virtual device
+                                        await output_audio_queue.put(resampled.tobytes())
+                                        print(f"[DIRECT OUTPUT] Sent {len(resampled)} samples to virtual device")
+                                    except Exception as e:
+                                        print(f"[DIRECT OUTPUT ERROR] {e}")
+                                
+                                # 发送静音数据保持连接
+                                # 创建3200个0值的int16数组（静音数据）并转换为字节流，用于网络传输
+                                silent_audio = np.zeros(3200, dtype=np.int16).tobytes()
+                                chunk_request = TranslateRequestData(
+                                    session_id=session_id,
+                                    event="Type_TaskRequest",
+                                    source_audio=Audio(binary_data=silent_audio)
+                                )
+                                await send_request(conn, chunk_request)
+                                
                         except asyncio.TimeoutError:
                             continue
                         except Exception as e:
@@ -373,9 +416,22 @@ class TranslatorAdapter:
         """Play audio chunks from queue to specified audio device"""
         output_stream = None
         try:
+            # Get device info to check supported channels
+            device_info = sd.query_devices(self.output_device)
+            max_channels = device_info.get('max_output_channels', 0)
+            
+            # Check if device has any output channels
+            if max_channels == 0:
+                raise ValueError(f"Device {self.output_device} ('{device_info.get('name', 'unknown')}') has no output channels")
+            
+            # Try mono first, fallback to stereo if mono is not supported
+            channels = 1 if max_channels >= 1 else 2
+            if max_channels < channels:
+                channels = max_channels
+            
             output_stream = sd.OutputStream(
                 samplerate=24000,
-                channels=1,
+                channels=channels,
                 dtype='int16',
                 device=self.output_device
             )
@@ -386,9 +442,18 @@ class TranslatorAdapter:
                 if audio_data is None:
                     break
                 audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                
+                # If using stereo output, convert mono to stereo
+                if channels == 2:
+                    audio_array = np.repeat(audio_array, 2)
+                
                 output_stream.write(audio_array)
+        except ValueError as e:
+            self._error(f"Audio playback configuration error: {e}")
         except Exception as e:
             self._error(f"Audio playback error: {e}")
+            self._error(f"Device info: {device_info}")
+            self._error(f"Tried to open with channels={channels}, samplerate=24000, dtype=int16")
         finally:
             if output_stream:
                 output_stream.stop()

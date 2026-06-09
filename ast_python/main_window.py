@@ -25,13 +25,22 @@ class TranslatorThread(QThread):
     translation_result = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
     status_changed = pyqtSignal(str)  # New signal for status updates
+    translation_enabled_changed = pyqtSignal(bool)  # New signal for translation toggle
     
-    def __init__(self, api_key, output_device=None):
+    def __init__(self, api_key, output_device=None, translation_enabled=True):
         super().__init__()
         self.api_key = api_key
         self.output_device = output_device
+        self.translation_enabled = translation_enabled
         self.running = False
         self.adapter = None  # Reference to TranslatorAdapter
+    
+    def set_translation_enabled(self, enabled):
+        """Toggle translation without stopping the connection"""
+        self.translation_enabled = enabled
+        if self.adapter:
+            self.adapter.set_translation_enabled(enabled)
+        self.translation_enabled_changed.emit(enabled)
     
     def run(self):
         self.running = True
@@ -41,7 +50,7 @@ class TranslatorThread(QThread):
             self.error_occurred.emit(str(e))
             
     async def translate(self):
-        self.adapter = TranslatorAdapter(self.api_key, self.output_device)
+        self.adapter = TranslatorAdapter(self.api_key, self.output_device, self.translation_enabled)
         
         def callback(text):
             if self.running:
@@ -176,6 +185,53 @@ class MainWindow(QMainWindow):
         api_layout.addStretch()
         main_layout.addLayout(api_layout)
         
+        # Translation Toggle Switch
+        toggle_widget = QWidget()
+        toggle_widget.setStyleSheet("background-color: #f0f0f0; padding: 10px; border-radius: 8px;")
+        toggle_layout = QHBoxLayout(toggle_widget)
+        toggle_layout.setSpacing(15)
+        toggle_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        toggle_label = QLabel("翻译功能:")
+        toggle_label.setFont(QFont("Arial", 12))
+        toggle_layout.addWidget(toggle_label)
+        
+        self.translation_toggle = QPushButton("已开启")
+        self.translation_toggle.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        self.translation_toggle.setCheckable(True)
+        self.translation_toggle.setChecked(True)
+        self.translation_toggle.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                padding: 8px 24px;
+                border: none;
+                border-radius: 20px;
+            }
+            QPushButton:hover {
+                background-color: #219a52;
+            }
+            QPushButton:checked {
+                background-color: #27ae60;
+            }
+            QPushButton:!checked {
+                background-color: #e74c3c;
+            }
+            QPushButton:!checked:hover {
+                background-color: #c0392b;
+            }
+        """)
+        self.translation_toggle.toggled.connect(self.on_translation_toggled)
+        toggle_layout.addWidget(self.translation_toggle)
+        
+        toggle_hint = QLabel("关闭后直接输出麦克风音频到虚拟声卡")
+        toggle_hint.setFont(QFont("Arial", 10))
+        toggle_hint.setStyleSheet("color: #666;")
+        toggle_layout.addWidget(toggle_hint)
+        
+        toggle_layout.addStretch()
+        main_layout.addWidget(toggle_widget)
+        
         # License Panel
         license_widget = QWidget()
         license_widget.setStyleSheet("background-color: #f8f9fa; padding: 15px; border-radius: 8px;")
@@ -280,16 +336,17 @@ class MainWindow(QMainWindow):
         self.load_output_devices()
     
     def load_output_devices(self):
+        """Load all available audio output devices"""
         try:
             devices = sd.query_devices()
             for i, device in enumerate(devices):
                 if device['max_output_channels'] > 0:
-                    self.output_device_combo.addItem(f"{device['name']} (Device {i})")
+                    self.output_device_combo.addItem(f"{device['name']} (Device {i})", userData=i)
         except Exception as e:
             print(f"Error loading output devices: {e}")
     
     def show_settings(self):
-        dialog = SettingsDialog(self)
+        dialog = SettingsDialog(self.config, self)
         if dialog.exec():
             api_key = self.config.api_key
             masked_key = api_key[:4] + '*' * 20 + api_key[-4:] if len(api_key) > 8 else "Not set"
@@ -311,11 +368,24 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "Please set API Key in Settings")
             return
         
+        # Get output device from user selection in combo box
         output_device = None
         index = self.output_device_combo.currentIndex()
         if index > 0:
-            # Convert combo index to device index (skip "Default Speaker")
-            output_device = index - 1
+            # Get the actual device ID from combo box user data
+            device_id = self.output_device_combo.itemData(index)
+            
+            # Validate the selected device has output channels
+            try:
+                device_info = sd.query_devices(device_id)
+                if device_info.get('max_output_channels', 0) > 0:
+                    output_device = device_id
+                else:
+                    QMessageBox.warning(self, "Warning", f"Selected device '{device_info.get('name', 'unknown')}' has no output channels. Please select a different device.")
+                    return
+            except Exception as e:
+                QMessageBox.warning(self, "Warning", f"Failed to validate output device: {e}")
+                return
         
         # Show loading state immediately
         self.start_btn.setText("Connecting...")
@@ -323,7 +393,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Connecting to server...")
         
         # Start translation in background
-        self.translator_thread = TranslatorThread(api_key, output_device)
+        self.translator_thread = TranslatorThread(api_key, output_device, self.translation_toggle.isChecked())
         self.translator_thread.translation_result.connect(self.update_output)
         self.translator_thread.error_occurred.connect(self.show_error)
         self.translator_thread.status_changed.connect(self.on_translator_status_changed)
@@ -408,6 +478,19 @@ class MainWindow(QMainWindow):
     def on_translation_finished(self):
         self.stop_translation()
     
+    def on_translation_toggled(self, checked):
+        """Handle translation toggle"""
+        if checked:
+            self.translation_toggle.setText("已开启")
+        else:
+            self.translation_toggle.setText("已关闭")
+        
+        # Update translation state if thread is running
+        if self.translator_thread and self.translator_thread.isRunning():
+            self.translator_thread.set_translation_enabled(checked)
+            status = "翻译功能已开启，正常翻译中" if checked else "翻译功能已关闭，直接输出麦克风音频"
+            self.status_bar.showMessage(status)
+    
     def check_license(self):
         """检查许可证状态"""
         try:
@@ -433,17 +516,18 @@ class MainWindow(QMainWindow):
             
             if success:
                 QMessageBox.information(self, "Success", message)
-                # 更新许可证状态显示
+                # 更新许可证状态显示（会自动禁用激活按钮）
                 self.update_license_display()
                 # 设置到期检测
                 self.schedule_expire_check()
             else:
                 QMessageBox.warning(self, "Error", message)
+                # 激活失败，重新启用按钮
+                self.activate_btn.setEnabled(True)
         except Exception as e:
             QMessageBox.warning(self, "Error", f"激活失败: {str(e)}")
-        
-        # 重新启用按钮
-        self.activate_btn.setEnabled(True)
+            # 激活失败，重新启用按钮
+            self.activate_btn.setEnabled(True)
     
     def update_license_display(self):
         """更新许可证状态显示"""

@@ -23,6 +23,29 @@ OPTIONS = {
     },
     'optimize': 2,
     'strip': True,
+    'argv_emulation': True,
+    'frameworks': [],
+    'packages': ['python_protogen', '_sounddevice_data'],
+    'site_packages': True,
+    'includes': [
+        'google.protobuf',
+        'PyQt6',
+        'sounddevice',
+        'numpy',
+        'pydub',
+        'websockets',
+        'aiohttp',
+        'requests',
+    ],
+    'excludes': [
+        'PyInstaller',
+        'django',
+        'pytest',
+        'numpy.random.tests',
+        'numpy._core.tests',
+        'numpy.lib.tests',
+        'numpy.tests',
+    ],
 }
 
 # 只有在图标文件存在时才添加
@@ -33,4 +56,5 @@ setup(
     app=APP,
     options={'py2app': OPTIONS},
     setup_requires=['py2app'],
+    packages=['python_protogen'],
 )

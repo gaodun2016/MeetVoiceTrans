@@ -14,6 +14,7 @@ import os
 import logging
 import platform
 import uuid
+import random
 
 # 密钥签名密钥（用于验证密钥合法性）
 # 生产环境应使用更安全的密钥管理方式
@@ -41,7 +42,23 @@ SIGNING_KEY = "MeetTranslator@2024#SecureKey"
 
 class LicenseManager:
     def __init__(self):
-        self.license_file = os.path.join(os.path.dirname(__file__), 'license.dat')
+        # 获取正确的许可证文件路径
+        # 使用用户主目录，避免 macOS App Translocation 导致的只读文件系统问题
+        # 在打包后的应用中，应用可能被复制到临时只读位置，无法写入
+        base_dir = os.path.dirname(__file__)
+        
+        # 检查是否在 zip 文件中（打包后的情况）
+        if '.zip' in base_dir:
+            # 在打包后的应用中，使用用户主目录
+            # macOS App Translocation 会将应用复制到临时只读位置
+            # 必须使用用户主目录来保存许可证文件
+            app_data_dir = os.path.expanduser('~/Library/Application Support/MeetTranslator')
+            os.makedirs(app_data_dir, exist_ok=True)
+            self.license_file = os.path.join(app_data_dir, 'license.dat')
+        else:
+            # 在开发环境中，使用脚本所在目录
+            self.license_file = os.path.join(base_dir, 'license.dat')
+        
         self.valid_until = 0
         self.card_type = ''
         self.activated = False
@@ -86,8 +103,8 @@ class LicenseManager:
         seconds: 自定义秒数（可选，用于生成短有效期测试卡）
         device_id: 设备 ID（可选，绑定特定设备）
         
-        密钥格式：card_type:duration[:device_id]:signature
-        有效期在激活时开始计算，而非生成时
+        密钥格式：card_type:expire_time[:device_id]:nonce:signature
+        有效期从生成时开始计算，过期时间固定不变
         """
         # 根据参数计算有效期时长
         if seconds > 0:
@@ -102,13 +119,23 @@ class LicenseManager:
         else:
             raise ValueError(f"Unknown card type: {card_type}")
         
-        # 生成密钥数据（格式：card_type:duration[:device_id]）
-        # 注意：这里存储的是有效期时长(duration)，而非过期时间
-        # 过期时间在激活时计算：当前时间 + duration
+        # 生成唯一随机数，确保每张卡密都是唯一的
+        nonce = random.randint(1000000000, 9999999999)
+        
+        # 获取当前网络时间（作为生成时间）
+        network_time = self._get_network_time()
+        if network_time == 0:
+            network_time = int(time.time())
+        
+        # 计算过期时间：生成时间 + 有效期时长（固定不变）
+        expire_time = network_time + duration
+        
+        # 生成密钥数据（格式：card_type:expire_time[:device_id]:nonce）
+        # 过期时间在生成时固定，不受激活时间影响
         if device_id:
-            data = f"{card_type}:{duration}:{device_id}"
+            data = f"{card_type}:{expire_time}:{device_id}:{nonce}"
         else:
-            data = f"{card_type}:{duration}"
+            data = f"{card_type}:{expire_time}:{nonce}"
         
         # 生成签名
         signature = self._sign(data)
@@ -137,10 +164,11 @@ class LicenseManager:
         返回: (success, message, valid_until, card_type)
         
         密钥格式：
-        card_type:duration:signature (无设备绑定，3部分)
-        card_type:duration:device_id:signature (有设备绑定，4部分)
+        card_type:expire_time:nonce:signature (无设备绑定，4部分)
+        card_type:expire_time:device_id:nonce:signature (预绑定设备，5部分)
         
-        有效期在激活时开始计算，而非生成时
+        过期时间在生成时固定，不受激活时间影响
+        首次激活时自动绑定到当前设备（软绑定）
         """
         try:
             # Base64 解码
@@ -150,15 +178,17 @@ class LicenseManager:
             parts = decoded_key.split(':')
             
             # 密钥格式：
-            # card_type:duration:signature (无设备绑定，3部分)
-            # card_type:duration:device_id:signature (有设备绑定，4部分)
+            # card_type:expire_time:nonce:signature (无设备绑定，4部分)
+            # card_type:expire_time:device_id:nonce:signature (预绑定设备，5部分)
             
-            if len(parts) == 4:
-                # 带设备绑定的格式
-                card_type, duration_str, device_id, signature = parts
-            elif len(parts) == 3:
-                # 无设备绑定的格式
-                card_type, duration_str, signature = parts
+            is_pre_bound = False  # 是否为预绑定密钥
+            if len(parts) == 5:
+                # 预绑定设备格式
+                card_type, expire_time_str, device_id, nonce, signature = parts
+                is_pre_bound = True
+            elif len(parts) == 4:
+                # 无绑定格式（首次激活时自动绑定）
+                card_type, expire_time_str, nonce, signature = parts
                 device_id = None
             else:
                 return False, "无效的密钥格式", 0, ''
@@ -166,35 +196,37 @@ class LicenseManager:
             # 获取当前设备 ID
             current_device = self.get_device_fingerprint()
             
-            # 如果密钥绑定了设备，验证是否匹配
-            if device_id and device_id != current_device:
+            # 如果是预绑定密钥，验证设备是否匹配
+            if is_pre_bound and device_id != current_device:
                 return False, "该卡密已绑定其他设备，无法在此设备使用", 0, ''
             
             # 生成验证用的数据
-            if len(parts) == 4:
-                data = f"{card_type}:{duration_str}:{device_id}"
+            if is_pre_bound:
+                data = f"{card_type}:{expire_time_str}:{device_id}:{nonce}"
             else:
-                data = f"{card_type}:{duration_str}"
+                data = f"{card_type}:{expire_time_str}:{nonce}"
             
             # 验证签名
             if not self._verify_signature(data, signature):
                 return False, "密钥签名无效", 0, ''
             
-            # 获取网络时间（作为激活时间）
+            # 使用卡密中嵌入的过期时间（生成时已固定）
+            expire_time = int(expire_time_str)
+            
+            # 获取网络时间（用于验证过期时间是否有效）
             network_time = self._get_network_time()
             if network_time == 0:
-                # 如果无法获取网络时间，使用本地时间（不太安全）
                 network_time = int(time.time())
             
-            # 计算过期时间：激活时间 + 有效期时长
-            duration = int(duration_str)
-            expire_time = network_time + duration
+            # 检查卡密是否已过期
+            if network_time > expire_time:
+                return False, "该卡密已过期", 0, ''
             
-            # 保存许可证
+            # 保存许可证（自动绑定到当前设备）
             self.valid_until = expire_time
             self.card_type = card_type
             self.activated = True
-            self.device_id = current_device  # 保存当前设备 ID
+            self.device_id = current_device  # 首次激活时绑定当前设备
             
             # 保存到文件
             self._save_license()
@@ -202,10 +234,10 @@ class LicenseManager:
             card_name = CARD_TYPES.get(card_type, {'name': '未知'})['name']
             expire_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(expire_time))
             
-            if device_id:
+            if is_pre_bound:
                 return True, f"激活成功！{card_name} - 有效期至: {expire_str}\n该卡密已绑定本设备", expire_time, card_type
             else:
-                return True, f"激活成功！{card_name} - 有效期至: {expire_str}", expire_time, card_type
+                return True, f"激活成功！{card_name} - 有效期至: {expire_str}\n", expire_time, card_type
         
         except Exception as e:
             return False, f"激活失败: {str(e)}", 0, ''
@@ -220,7 +252,7 @@ class LicenseManager:
             # 类型: 'suning' - 从苏宁接口获取时间
             servers = [
                 ('https://api.pingxx.com/time', 'json'),       # Ping++ - 返回 {"timestamp": ...}
-                ('https://quan.suning.com/getSysTime.do', 'suning'),  # 苏宁 - 返回 {"sysTime2": "2024-03-20 15:30:00"}
+                # ('https://quan.suning.com/getSysTime.do', 'suning'),  # 苏宁 - 返回 {"sysTime2": "2024-03-20 15:30:00"}
                 ('https://www.baidu.com', 'header'),           # 百度
                 ('https://www.taobao.com', 'header'),          # 淘宝
                 ('https://www.aliyun.com', 'header'),          # 阿里云
@@ -414,6 +446,7 @@ def main():
   %(prog)s --type trial -c 100 -o keys.txt 生成100张体验卡并保存到文件
   %(prog)s --type day --bind-device      生成1张天卡并绑定当前设备
   %(prog)s --type day --device-id abc123  生成1张天卡并绑定指定设备
+  %(prog)s --type day --reset            重置当前卡密并生成1张天卡
         '''
     )
     
@@ -476,9 +509,21 @@ def main():
         help='指定设备 ID (可选)'
     )
     
+    parser.add_argument(
+        '--reset',
+        action='store_true',
+        help='重置当前已绑定的卡密 (可选)'
+    )
+    
     args = parser.parse_args()
     
     lm = LicenseManager()
+    
+    # 重置当前已绑定的卡密
+    if args.reset:
+        lm.reset_license()
+        print("已重置当前已绑定的卡密")
+        print()
     
     # 获取设备 ID
     device_id = None

@@ -24,10 +24,37 @@ except ImportError:
         InvalidStatusCode = Exception
 
 # 获取当前脚本所在目录
+# 注意：在 py2app 打包后，__file__ 可能指向 ZIP 文件内的路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
-# 计算 python_protogen 目录的路径
+# 如果当前目录在 ZIP 文件中（路径包含 .zip 后缀），提取 ZIP 文件所在的实际目录
+if ".zip" in current_dir:
+    # 找到 .zip 的位置并提取 ZIP 文件路径
+    zip_pos = current_dir.index(".zip") + 4  # 4 是 ".zip" 的长度
+    zip_path = current_dir[:zip_pos]
+    current_dir = os.path.dirname(zip_path)
+    print(f"[DEBUG] Detected ZIP file: {zip_path}, adjusted current_dir to: {current_dir}")
+
+print(f"[DEBUG] Current directory: {current_dir}")
+
+# 计算 python_protogen 目录的路径（检查多个可能位置）
 protogen_dir = os.path.join(current_dir, "python_protogen")
+print(f"[DEBUG] Trying path 1: {protogen_dir} - exists: {os.path.exists(protogen_dir)}")
+
+# 如果当前目录下没有，检查 python3.11 目录（py2app 打包后的位置，当前目录是 lib/）
+if not os.path.exists(protogen_dir):
+    protogen_dir = os.path.join(current_dir, "python3.11", "python_protogen")
+    print(f"[DEBUG] Trying path 2: {protogen_dir} - exists: {os.path.exists(protogen_dir)}")
+
+# 如果还没有，检查 lib/python3.11 目录（非打包时的位置）
+if not os.path.exists(protogen_dir):
+    protogen_dir = os.path.join(current_dir, "lib", "python3.11", "python_protogen")
+    print(f"[DEBUG] Trying path 3: {protogen_dir} - exists: {os.path.exists(protogen_dir)}")
+
+# 如果还没有，检查上层目录
+if not os.path.exists(protogen_dir):
+    protogen_dir = os.path.join(os.path.dirname(current_dir), "python_protogen")
+    print(f"[DEBUG] Trying path 4: {protogen_dir} - exists: {os.path.exists(protogen_dir)}")
 
 # 设置 pydub 使用打包后的 ffmpeg
 # 在打包后的应用中，ffmpeg 可能在以下位置：
@@ -136,14 +163,27 @@ async def play_audio_to_device(audio_queue, device_id):
     """Play audio chunks from queue to specified audio device"""
     output_stream = None
     try:
+        # Get device info to check supported channels
+        device_info = sd.query_devices(device_id)
+        max_channels = device_info.get('max_output_channels', 0)
+        
+        # Check if device has any output channels
+        if max_channels == 0:
+            raise ValueError(f"Device {device_id} ('{device_info.get('name', 'unknown')}') has no output channels")
+        
+        # Try mono first, fallback to stereo if mono is not supported
+        channels = 1 if max_channels >= 1 else 2
+        if max_channels < channels:
+            channels = max_channels
+        
         output_stream = sd.OutputStream(
             samplerate=24000,
-            channels=1,
+            channels=channels,
             dtype='int16',
             device=device_id
         )
         output_stream.start()
-        print(f"[PLAYBACK] Started audio output to device {device_id}")
+        print(f"[PLAYBACK] Started audio output to device {device_id} ('{device_info.get('name', 'unknown')}', channels: {channels})")
         
         while True:
             try:
@@ -152,8 +192,13 @@ async def play_audio_to_device(audio_queue, device_id):
                     break  # Signal to stop
                 # Audio data is already decoded to PCM, play directly
                 audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                
+                # If using stereo output, convert mono to stereo
+                if channels == 2:
+                    audio_array = np.repeat(audio_array, 2)
+                
                 output_stream.write(audio_array)
-                print(f"[PLAYBACK] Played {len(audio_data)} bytes of PCM audio")
+                print(f"[PLAYBACK] Played {len(audio_data)} bytes of PCM audio (output channels: {channels})")
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -722,12 +767,33 @@ async def main(output_device=None):
     end = time.time()
     logging.info(f"Total time: {end - start:.6f} 秒")
 
+def get_device_id(device_spec):
+    """Get device ID from device specification (can be ID or name substring)"""
+    if device_spec is None:
+        return None
+    
+    # Try as integer first
+    try:
+        return int(device_spec)
+    except ValueError:
+        pass
+    
+    # Try to find by name substring
+    devices = sd.query_devices()
+    for i, device in enumerate(devices):
+        if device_spec.lower() in device['name'].lower():
+            return i
+    
+    print(f"[WARNING] Device '{device_spec}' not found, using default")
+    return None
+
+
 if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description='Real-time speech translation with virtual audio output')
-    parser.add_argument('-o', '--output-device', type=int, default=None, 
-                        help='Audio output device ID for virtual audio (use -l to list devices)')
+    parser.add_argument('-o', '--output-device', type=str, default=None, 
+                        help='Audio output device ID or name substring for virtual audio (use -l to list devices)')
     parser.add_argument('-l', '--list-devices', action='store_true', 
                         help='List all available audio devices')
     
@@ -748,8 +814,12 @@ if __name__ == "__main__":
     
     print("=== Script started ===")
     logging.info("=== Script started ===")
+    
+    # Convert device specification to device ID
+    output_device_id = get_device_id(args.output_device)
+    
     try:
-        asyncio.run(main(args.output_device))
+        asyncio.run(main(output_device_id))
     except Exception as e:
         print(f"Error: {e}")
         logging.error(f"Error: {e}")
