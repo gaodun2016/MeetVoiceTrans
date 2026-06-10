@@ -42,6 +42,11 @@ class TranslatorThread(QThread):
             self.adapter.set_translation_enabled(enabled)
         self.translation_enabled_changed.emit(enabled)
     
+    def set_aec_enabled(self, enabled):
+        """Toggle AEC without stopping the connection"""
+        if self.adapter:
+            self.adapter.set_aec_enabled(enabled)
+    
     def run(self):
         self.running = True
         try:
@@ -231,6 +236,53 @@ class MainWindow(QMainWindow):
         
         toggle_layout.addStretch()
         main_layout.addWidget(toggle_widget)
+        
+        # AEC 回声消除开关
+        aec_widget = QWidget()
+        aec_widget.setStyleSheet("background-color: #ffffff; padding: 15px; border-radius: 8px; margin: 5px 0;")
+        aec_layout = QHBoxLayout(aec_widget)
+        aec_layout.setSpacing(10)
+        aec_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        aec_label = QLabel("回声消除 (AEC):")
+        aec_label.setFont(QFont("Arial", 12))
+        aec_layout.addWidget(aec_label)
+        
+        self.aec_toggle = QPushButton("已开启")
+        self.aec_toggle.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        self.aec_toggle.setCheckable(True)
+        self.aec_toggle.setChecked(True)
+        self.aec_toggle.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                padding: 8px 24px;
+                border: none;
+                border-radius: 20px;
+            }
+            QPushButton:hover {
+                background-color: #219a52;
+            }
+            QPushButton:checked {
+                background-color: #27ae60;
+            }
+            QPushButton:!checked {
+                background-color: #e74c3c;
+            }
+            QPushButton:!checked:hover {
+                background-color: #c0392b;
+            }
+        """)
+        self.aec_toggle.toggled.connect(self.on_aec_toggled)
+        aec_layout.addWidget(self.aec_toggle)
+        
+        aec_hint = QLabel("消除扬声器播放的声音被麦克风重新捕捉产生的回声")
+        aec_hint.setFont(QFont("Arial", 10))
+        aec_hint.setStyleSheet("color: #666;")
+        aec_layout.addWidget(aec_hint)
+        
+        aec_layout.addStretch()
+        main_layout.addWidget(aec_widget)
         
         # License Panel
         license_widget = QWidget()
@@ -489,6 +541,19 @@ class MainWindow(QMainWindow):
         if self.translator_thread and self.translator_thread.isRunning():
             self.translator_thread.set_translation_enabled(checked)
             status = "翻译功能已开启，正常翻译中" if checked else "翻译功能已关闭，直接输出麦克风音频"
+            self.status_bar.showMessage(status)
+    
+    def on_aec_toggled(self, checked):
+        """Handle AEC toggle"""
+        if checked:
+            self.aec_toggle.setText("已开启")
+        else:
+            self.aec_toggle.setText("已关闭")
+        
+        # Update AEC state if thread is running
+        if self.translator_thread and self.translator_thread.isRunning():
+            self.translator_thread.set_aec_enabled(checked)
+            status = "AEC 已开启，回声消除已启用" if checked else "AEC 已关闭，回声消除已禁用"
             self.status_bar.showMessage(status)
     
     def check_license(self):

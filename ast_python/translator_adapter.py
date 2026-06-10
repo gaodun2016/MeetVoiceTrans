@@ -13,6 +13,83 @@ from meet_translator import (
 import numpy as np
 import sounddevice as sd
 
+
+class SimpleAEC:
+    """简单的声学回声消除器 (Acoustic Echo Cancellation)
+    
+    使用自适应滤波器（NLMS算法）来消除回声
+    """
+    
+    def __init__(self, filter_length=2048, mu=0.1, sample_rate=16000):
+        """
+        初始化 AEC
+        
+        Args:
+            filter_length: 滤波器长度（样本数），越大能消除的延迟越长，但计算量越大
+            mu: NLMS 步长参数，0.01-0.5 之间，越大收敛越快但可能不稳定
+            sample_rate: 采样率
+        """
+        self.filter_length = filter_length
+        self.mu = mu
+        self.sample_rate = sample_rate
+        
+        # 滤波器系数（自适应权重）
+        self.w = np.zeros(filter_length)
+        
+        # 参考信号缓冲区（存储最近播放的音频）
+        self.x_buffer = np.zeros(filter_length)
+        
+        # 估计的回声信号
+        self.echo_estimate = 0
+        
+        print(f"[AEC] SimpleAEC initialized: filter_length={filter_length}, mu={mu}, sample_rate={sample_rate}")
+    
+    def process(self, mic_input, speaker_output):
+        """
+        处理音频数据，消除回声
+        
+        Args:
+            mic_input: 麦克风输入（numpy array，int16 或 float）
+            speaker_output: 扬声器输出/参考信号（numpy array，int16 或 float）
+        
+        Returns:
+            消除了回声的麦克风输入
+        """
+        # 转换为 float32（如果需要）
+        if mic_input.dtype != np.float32:
+            mic_input = mic_input.astype(np.float32) / 32768.0
+        if speaker_output.dtype != np.float32:
+            speaker_output = speaker_output.astype(np.float32) / 32768.0
+        
+        # 更新参考信号缓冲区
+        self.x_buffer = np.roll(self.x_buffer, len(speaker_output))
+        self.x_buffer[:len(speaker_output)] = speaker_output
+        
+        # 计算估计的回声：y = w * x
+        self.echo_estimate = np.dot(self.w, self.x_buffer)
+        
+        # 计算误差（麦克风输入 - 估计的回声）
+        error = mic_input - self.echo_estimate
+        
+        # 使用 NLMS 算法更新滤波器系数
+        # w = w + mu * e * x / (x^T * x + epsilon)
+        x_norm = np.dot(self.x_buffer, self.x_buffer) + 1e-8
+        self.w = self.w + self.mu * error * self.x_buffer / x_norm
+        
+        # 限制滤波器系数的大小，避免发散
+        max_coef = 10.0
+        self.w = np.clip(self.w, -max_coef, max_coef)
+        
+        return error
+    
+    def reset(self):
+        """重置滤波器状态"""
+        self.w = np.zeros(self.filter_length)
+        self.x_buffer = np.zeros(self.filter_length)
+        self.echo_estimate = 0
+        print("[AEC] Reset")
+
+
 class TranslatorAdapter:
     def __init__(self, api_key, output_device=None, translation_enabled=True):
         self.api_key = api_key
@@ -24,6 +101,24 @@ class TranslatorAdapter:
         self.error_callback = None
         self.audio_callback = None
         self.conn = None  # WebSocket connection reference
+        
+        # 初始化 AEC（声学回声消除器）
+        # 用于消除扬声器播放的翻译音频被麦克风重新捕捉产生的回声
+        self.aec_enabled = True  # 默认开启 AEC
+        self.aec = SimpleAEC(filter_length=2048, mu=0.1, sample_rate=16000)
+        
+        # 缓冲区用于存储播放的音频数据（作为 AEC 的参考信号）
+        self.playback_buffer = b""
+        self.playback_buffer_size = 16000 * 2  # 1秒的音频（16bit, 16kHz, mono）
+    
+    def set_aec_enabled(self, enabled):
+        """启用/禁用 AEC（声学回声消除）"""
+        self.aec_enabled = enabled
+        if enabled:
+            self.aec.reset()
+            self._status("AEC 已开启，回声消除已启用")
+        else:
+            self._status("AEC 已关闭，回声消除已禁用")
     
     def set_translation_enabled(self, enabled):
         """Toggle translation without stopping connection"""
@@ -107,7 +202,29 @@ class TranslatorAdapter:
             def audio_callback(indata, frames, time, status):
                 if status:
                     print(f"Audio input status: {status}")
-                audio_data = indata.astype(np.int16).tobytes()
+                
+                mic_input = indata.astype(np.int16)
+                
+                # 使用 AEC 处理音频，消除扬声器播放的回声
+                if self.aec_enabled and len(self.playback_buffer) > 0:
+                    # 获取最近播放的音频数据作为参考信号
+                    # 延迟一段时间以模拟声学延迟（通常10-50ms）
+                    delay_samples = int(0.03 * 16000)  # 30ms 延迟
+                    start_pos = max(0, len(self.playback_buffer) - len(mic_input.tobytes()) - delay_samples)
+                    reference_audio = self.playback_buffer[start_pos:start_pos + len(mic_input.tobytes())]
+                    
+                    if len(reference_audio) == len(mic_input.tobytes()):
+                        reference_array = np.frombuffer(reference_audio, dtype=np.int16)
+                        # 使用 AEC 处理
+                        processed_audio = self.aec.process(mic_input, reference_array)
+                        # 将处理后的音频转换回 int16
+                        processed_audio = (processed_audio * 32768).astype(np.int16)
+                        audio_data = processed_audio.tobytes()
+                    else:
+                        audio_data = mic_input.tobytes()
+                else:
+                    audio_data = mic_input.tobytes()
+                
                 if recording:
                     try:
                         audio_queue.put_nowait(audio_data)
@@ -441,6 +558,13 @@ class TranslatorAdapter:
                 audio_data = await audio_queue.get()
                 if audio_data is None:
                     break
+                
+                # 将播放的音频数据存储到 playback_buffer 中，用于 AEC 处理
+                self.playback_buffer += audio_data
+                # 保持缓冲区大小在合理范围内
+                if len(self.playback_buffer) > self.playback_buffer_size * 2:
+                    self.playback_buffer = self.playback_buffer[-self.playback_buffer_size:]
+                
                 audio_array = np.frombuffer(audio_data, dtype=np.int16)
                 
                 # If using stereo output, convert mono to stereo
