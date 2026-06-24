@@ -1,10 +1,14 @@
 # Meet Translator - 实时同声传译工具
 
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Platform](https://img.shields.io/badge/platform-macOS-lightgray.svg)
+![Python](https://img.shields.io/badge/python-3.8%2B-green.svg)
+
 Meet Translator 是一款基于豆包同声传译2.0 API 的实时语音翻译工具，可以在会议、通话等场景中实时将语音翻译成目标语言。
 
 ---
 
-## 功能特性
+## 🌟 功能特性
 
 - **实时翻译**：低延迟端到端语音翻译
 - **多语言支持**：支持中文、英文、日文、韩文等多种语言的互译
@@ -195,12 +199,58 @@ A：请检查：
 
 ---
 
-## 许可证
+## 📜 许可证
 
-本软件需要有效的许可证才能使用。支持以下类型：
+### 软件许可证
+
+本项目采用 **MIT License** 开源协议。详见 [LICENSE](LICENSE) 文件。
+
+### 使用许可证
+
+本软件需要有效的使用许可证才能使用翻译服务。支持以下类型：
 
 - 体验卡（1小时）
 - 天卡（1天）
 - 周卡（7天）
 - 月卡（30天）
 - 年卡（365天）
+
+---
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+### 开发环境
+
+```bash
+# 克隆项目
+git clone https://github.com/yourusername/meet-translator.git
+cd meet-translator
+
+# 创建虚拟环境
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 安装依赖
+pip install -r requirements.txt
+```
+
+### 代码规范
+
+- 遵循 PEP 8 编码规范
+- 使用 `black` 进行代码格式化
+- 使用 `flake8` 进行代码检查
+
+---
+
+## 📧 联系方式
+
+如有问题或建议，欢迎通过以下方式联系：
+
+- 提交 [Issue](https://github.com/yourusername/meet-translator/issues)
+- 645129984@qq.com
+
+---
+
+**⭐ 如果本项目对您有帮助，请给个 Star！**
