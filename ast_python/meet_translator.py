@@ -749,7 +749,7 @@ async def translate_v4_microphone(conf: Config, out_dir: str = "output", output_
 # Example usage
 async def main(output_device=None):
     conf = Config(ws_url="wss://openspeech.bytedance.com/api/v4/ast/v2/translate",
-                   app_key="91a2aed7-1566-4872-be25-de03af780fda",
+                   app_key="",
                   resource_id="volc.service_type.10053")
     
     logging.info("="*60)

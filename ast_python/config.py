@@ -3,7 +3,9 @@ import os
 
 class Config:
     def __init__(self):
-        self.config_dir = os.path.expanduser("~/.meet_translator")
+        # 使用 macOS 标准的应用数据目录
+        # ~/Library/Application Support 是 macOS 推荐的应用数据存储位置
+        self.config_dir = os.path.expanduser("~/Library/Application Support/MeetTranslator")
         self.config_file = os.path.join(self.config_dir, "config.json")
         self.defaults = {
             "api_key": "",

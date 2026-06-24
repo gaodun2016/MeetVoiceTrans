@@ -180,6 +180,7 @@ class MainWindow(QMainWindow):
         self.output_device_combo = QComboBox()
         self.output_device_combo.setFont(QFont("Arial", 12))
         self.output_device_combo.addItem("Default Speaker")
+        self.output_device_combo.currentIndexChanged.connect(self.on_output_device_changed)
         api_layout.addWidget(self.output_device_combo)
         
         api_layout.addStretch()
@@ -337,13 +338,35 @@ class MainWindow(QMainWindow):
     
     def load_output_devices(self):
         """Load all available audio output devices"""
+        saved_device_id = self.config.output_device
+        selected_index = 0  # 默认选中 "Default Speaker"
+        
         try:
             devices = sd.query_devices()
             for i, device in enumerate(devices):
                 if device['max_output_channels'] > 0:
                     self.output_device_combo.addItem(f"{device['name']} (Device {i})", userData=i)
+                    # 如果当前设备是上次保存的设备，记录索引
+                    if saved_device_id == i:
+                        selected_index = self.output_device_combo.count() - 1
         except Exception as e:
             print(f"Error loading output devices: {e}")
+        
+        # 设置上次选择的设备
+        self.output_device_combo.setCurrentIndex(selected_index)
+    
+    def on_output_device_changed(self, index):
+        """Callback when output device selection changes"""
+        if index == 0:
+            # "Default Speaker"
+            device_id = -1
+        else:
+            device_id = self.output_device_combo.itemData(index)
+        
+        # 保存到配置
+        self.config.output_device = device_id
+        self.config.save()
+        print(f"Output device saved: {device_id}")
     
     def show_settings(self):
         dialog = SettingsDialog(self.config, self)
